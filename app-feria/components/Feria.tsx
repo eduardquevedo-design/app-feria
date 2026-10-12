@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { addDoc, collection, deleteDoc, doc, increment, onSnapshot, query, updateDoc, where, writeBatch } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
@@ -16,6 +16,22 @@ const TABS: [Tab, string][] = [["vender", "Vender"], ["productos", "Productos"],
 const PAYS: [string, string][] = [["efectivo", "Efectivo"], ["transferencia", "Transferencia"], ["mercadopago", "Mercado Pago"]];
 const field = "w-full rounded-lg border border-ink/25 bg-white px-3 py-3 text-base";
 const empty = { name: "", price: "", stock: "", min: "0" };
+
+// Dos opciones para la foto: sacarla con la cámara en el momento o elegirla de la galería.
+function PhotoButtons({ onFile }: { onFile: (f: File) => void }) {
+  const pick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) onFile(file);
+    e.target.value = "";
+  };
+  const btn = "flex-1 cursor-pointer rounded-lg border-2 border-ink/25 px-2 py-3 text-center text-sm font-bold focus-within:outline focus-within:outline-2 focus-within:outline-sun";
+  return (
+    <div className="flex gap-2">
+      <label className={btn}>Sacar foto<input type="file" accept="image/*" capture="environment" className="sr-only" onChange={pick} /></label>
+      <label className={btn}>Elegir de galería<input type="file" accept="image/*" className="sr-only" onChange={pick} /></label>
+    </div>
+  );
+}
 
 export default function Feria() {
   const { uid } = useUser();
@@ -145,22 +161,25 @@ export default function Feria() {
               <label className="text-sm">Stock<input inputMode="numeric" value={f.stock} onChange={(e) => setF({ ...f, stock: e.target.value })} className={field} /></label>
               <label className="text-sm">Avisar con<input inputMode="numeric" value={f.min} onChange={(e) => setF({ ...f, min: e.target.value })} className={field} /></label>
             </div>
-            <label className="flex items-center gap-3 text-sm">
+            <div className="flex items-center gap-3 text-sm">
               <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-awning/10">{fImg ? <img src={fImg} alt="" className="h-full w-full object-cover" /> : "Sin foto"}</span>
-              <span className="flex-1">Foto (opcional)<input key={fKey} type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) toThumb(file).then(setFImg).catch(console.error); }} className="mt-1 block w-full text-base" /></span>
-            </label>
+              <div className="flex-1 space-y-1">
+                <p>Foto (opcional)</p>
+                <PhotoButtons onFile={(file) => toThumb(file).then(setFImg).catch(console.error)} />
+              </div>
+            </div>
             <button onClick={addProduct} className="w-full rounded-xl bg-sun py-3 text-lg font-extrabold">Agregar producto</button>
           </section>
           <ul className="space-y-3">
             {products.map((p) => (
               <li key={p.id} className="space-y-2 rounded-xl bg-white p-4">
                 <div className="flex items-center gap-3">
-                  <label className="flex h-16 w-16 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-awning/10 text-xs font-bold text-awning">
-                    {p.img ? <img src={p.img} alt={`Cambiar foto de ${p.name}`} className="h-full w-full object-cover" /> : "Agregar foto"}
-                    <input type="file" accept="image/*" className="sr-only" onChange={(e) => { const file = e.target.files?.[0]; if (file) toThumb(file).then((img) => updateDoc(doc(db, "users", uid, "products", p.id), { img })).catch(console.error); }} />
-                  </label>
+                  <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-awning/10 text-xs font-bold text-awning">
+                    {p.img ? <img src={p.img} alt="" className="h-full w-full object-cover" /> : "Sin foto"}
+                  </span>
                   <p className="font-bold">{p.name}</p>
                 </div>
+                <PhotoButtons onFile={(file) => toThumb(file).then((img) => updateDoc(doc(db, "users", uid, "products", p.id), { img })).catch(console.error)} />
                 <div className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
                   <label className="text-sm">Precio<input key={`${p.id}-${p.price}`} inputMode="numeric" defaultValue={p.price} onBlur={(e) => editNum(p, "price", e.target.value)} className={field} /></label>
                   <label className="text-sm">Stock<input key={`${p.id}-${p.stock}`} inputMode="numeric" defaultValue={p.stock} onBlur={(e) => editNum(p, "stock", e.target.value)} className={field} /></label>
