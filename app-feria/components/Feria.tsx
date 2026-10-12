@@ -10,9 +10,10 @@ import { useUser } from "./AuthGate";
 const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format;
 
 type Product = { id: string; name: string; price: number; stock: number; min: number; img?: string };
-type Sale = { id: string; at: number; total: number; items: { id: string; name: string; price: number; qty: number }[] };
+type Sale = { id: string; at: number; total: number; pay?: string; voided?: boolean; items: { id: string; name: string; price: number; qty: number }[] };
 type Tab = "vender" | "productos" | "hoy";
 const TABS: [Tab, string][] = [["vender", "Vender"], ["productos", "Productos"], ["hoy", "Hoy"]];
+const PAYS: [string, string][] = [["efectivo", "Efectivo"], ["transferencia", "Transferencia"], ["mercadopago", "Mercado Pago"]];
 const field = "w-full rounded-lg border border-ink/25 bg-white px-3 py-3 text-base";
 const empty = { name: "", price: "", stock: "", min: "0" };
 
@@ -26,6 +27,8 @@ export default function Feria() {
   const [confirmId, setConfirmId] = useState("");
   const [fImg, setFImg] = useState("");
   const [fKey, setFKey] = useState(0);
+  const [pay, setPay] = useState("efectivo");
+  const [voidId, setVoidId] = useState("");
 
   useEffect(() => {
     const start = new Date();
@@ -43,11 +46,22 @@ export default function Feria() {
 
   function charge() {
     const batch = writeBatch(db);
-    batch.set(doc(collection(db, "users", uid, "sales")), { at: Date.now(), total, items: lines.map(({ id, name, price, qty }) => ({ id, name, price, qty })) });
+    batch.set(doc(collection(db, "users", uid, "sales")), { at: Date.now(), total, pay, items: lines.map(({ id, name, price, qty }) => ({ id, name, price, qty })) });
     lines.forEach((l) => batch.update(doc(db, "users", uid, "products", l.id), { stock: increment(-l.qty) }));
     // Sin señal el commit queda pendiente y se sincroniza solo, por eso no se espera.
     batch.commit().catch(console.error);
     setCart({});
+  }
+
+  function voidSale(s: Sale) {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "users", uid, "sales", s.id), { voided: true, voidedAt: Date.now() });
+    // Solo se devuelve el stock de productos que todavía existen.
+    s.items.forEach((i) => {
+      if (products.some((p) => p.id === i.id)) batch.update(doc(db, "users", uid, "products", i.id), { stock: increment(i.qty) });
+    });
+    batch.commit().catch(console.error);
+    setVoidId("");
   }
 
   function addProduct() {
@@ -65,16 +79,19 @@ export default function Feria() {
     updateDoc(doc(db, "users", uid, "products", p.id), { [key]: v }).catch(console.error);
   };
 
-  const totalHoy = sales.reduce((a, s) => a + s.total, 0);
+  const active = sales.filter((s) => !s.voided);
+  const totalHoy = active.reduce((a, s) => a + s.total, 0);
+  const byPay = PAYS.map(([key, label]) => ({ label, sum: active.filter((s) => s.pay === key).reduce((a, s) => a + s.total, 0) }));
+  const sinPago = totalHoy - byPay.reduce((a, b) => a + b.sum, 0);
   const units: Record<string, { name: string; qty: number }> = {};
-  sales.forEach((s) => s.items.forEach((i) => {
+  active.forEach((s) => s.items.forEach((i) => {
     if (!units[i.id]) units[i.id] = { name: i.name, qty: 0 };
     units[i.id].qty += i.qty;
   }));
   const low = products.filter((p) => p.stock <= p.min);
 
   return (
-    <div className="mx-auto min-h-dvh max-w-xl pb-40">
+    <div className="mx-auto min-h-dvh max-w-xl pb-60">
       <div className="awning h-3" />
       <header className="flex items-center justify-between px-4 py-3">
         <h1 className="text-2xl font-extrabold">Mi puesto</h1>
@@ -164,7 +181,7 @@ export default function Feria() {
           <section>
             <p className="text-sm">Vendido hoy</p>
             <p className="text-5xl font-extrabold">{money(totalHoy)}</p>
-            <p>{sales.length} {sales.length === 1 ? "venta" : "ventas"}</p>
+            <p>{active.length} {active.length === 1 ? "venta" : "ventas"}{sales.length > active.length ? ` (${sales.length - active.length} anulada${sales.length - active.length === 1 ? "" : "s"})` : ""}</p>
           </section>
           {sales.length === 0 ? <p>Todavía no vendiste nada hoy. Las ventas que cobres aparecen acá.</p> : (
             <section>
@@ -175,6 +192,38 @@ export default function Feria() {
                 ))}
               </ul>
             </section>
+          )}
+          {sales.length > 0 && (
+            <>
+              <section>
+                <h2 className="mb-2 text-lg font-bold">Por medio de pago</h2>
+                <ul className="divide-y divide-ink/15 rounded-xl bg-white">
+                  {byPay.map((b) => <li key={b.label} className="flex justify-between px-4 py-3"><span>{b.label}</span><b>{money(b.sum)}</b></li>)}
+                  {sinPago > 0 && <li className="flex justify-between px-4 py-3"><span>Sin medio de pago</span><b>{money(sinPago)}</b></li>}
+                </ul>
+              </section>
+              <section>
+                <h2 className="mb-2 text-lg font-bold">Ventas de hoy</h2>
+                <ul className="space-y-2">
+                  {sales.map((s) => (
+                    <li key={s.id} className={`rounded-xl bg-white p-3 ${s.voided ? "opacity-60" : ""}`}>
+                      <div className="flex justify-between gap-3">
+                        <span className={s.voided ? "line-through" : ""}>{new Date(s.at).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })} · {s.items.map((i) => `${i.qty}× ${i.name}`).join(", ")}</span>
+                        <b className={s.voided ? "line-through" : ""}>{money(s.total)}</b>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-sm">
+                        <span>{s.voided ? "Anulada" : PAYS.find(([k]) => k === s.pay)?.[1] ?? ""}</span>
+                        {!s.voided && (voidId === s.id ? (
+                          <button onClick={() => voidSale(s)} className="rounded-lg bg-alert px-3 py-2 font-bold text-white">Confirmar anulación</button>
+                        ) : (
+                          <button onClick={() => setVoidId(s.id)} className="rounded-lg border-2 border-ink/25 px-3 py-2 font-bold">Anular</button>
+                        ))}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            </>
           )}
           {low.length > 0 && (
             <section>
@@ -188,13 +237,20 @@ export default function Feria() {
       )}
 
       {tab === "vender" && count > 0 && (
-        <div className="fixed inset-x-0 bottom-16 mx-auto flex max-w-xl items-center gap-3 border-t-2 border-ink bg-white p-3">
+        <div className="fixed inset-x-0 bottom-16 mx-auto max-w-xl border-t-2 border-ink bg-white p-3">
+          <div className="mb-3 grid grid-cols-3 gap-2" role="radiogroup" aria-label="Medio de pago">
+            {PAYS.map(([key, label]) => (
+              <button key={key} role="radio" aria-checked={pay === key} onClick={() => setPay(key)} className={`rounded-lg border-2 py-2 text-sm font-bold ${pay === key ? "border-ink bg-ink text-white" : "border-ink/25"}`}>{label}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
           <div className="flex-1">
             <p className="text-sm">{count} {count === 1 ? "unidad" : "unidades"}</p>
             <p className="text-2xl font-extrabold">{money(total)}</p>
           </div>
           <button onClick={() => setCart({})} className="px-3 py-3 text-sm underline">Vaciar</button>
           <button onClick={charge} className="rounded-xl bg-sun px-6 py-4 text-lg font-extrabold">Cobrar</button>
+          </div>
         </div>
       )}
 
